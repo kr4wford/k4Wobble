@@ -1,0 +1,44 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+            generator: ""              # default Visual Studio (multi-config)
+          - os: macos-latest
+            name: macOS
+            generator: "-G Xcode"      # multi-config so artefacts land in Release/
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.generator }}
+
+      - name: Build
+        run: cmake --build build --config Release --target k4Wobble_VST3 --parallel
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: k4Wobble-${{ matrix.name }}-VST3
+          path: build/k4Wobble_artefacts/Release/VST3/*.vst3
+          if-no-files-found: error

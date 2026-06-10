@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+            generator: ""
+            asset: k4Wobble-Windows.zip
+          - os: macos-latest
+            name: macOS (Apple Silicon)
+            generator: "-G Xcode"
+            asset: k4Wobble-macOS-AppleSilicon.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.generator }}
+
+      - name: Build
+        run: cmake --build build --config Release --target k4Wobble_VST3 --parallel
+
+      - name: Package
+        run: |
+          cd build/k4Wobble_artefacts/Release/VST3
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "$GITHUB_WORKSPACE/${{ matrix.asset }}" "k4 Wobble.vst3"
+          else
+            zip -r "$GITHUB_WORKSPACE/${{ matrix.asset }}" "k4 Wobble.vst3"
+          fi
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
