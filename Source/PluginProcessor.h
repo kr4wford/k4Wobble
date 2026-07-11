@@ -45,6 +45,21 @@ private:
 
     void pushVisualizerSamples (const float* dry, const float* wet, const float* mod, int n);
 
+    // Raw atomic pointers cached once: with ~90 parameters, per-block string
+    // lookups through the APVTS map are measurable.
+    struct ParamPtrs
+    {
+        std::atomic<float> *rate, *shape, *filter, *cutoff, *res, *depth,
+                           *drive, *width, *mix, *pattern, *steps,
+                           *split, *swing, *push, *slope, *drivemode,
+                           *lazy, *steplen, *trim, *autogain;
+        std::atomic<float> *stepDiv[wobble::maxSteps];
+        std::atomic<float> *stepDep[wobble::maxSteps];
+        std::atomic<float> *stepCut[wobble::maxSteps];
+        std::atomic<float> *stepShp[wobble::maxSteps];
+    };
+    ParamPtrs prm {};
+
     static constexpr int visFifoSize = 1 << 15; // 32768
     juce::AbstractFifo  visFifo { visFifoSize };
     std::vector<float>  visBufferDry, visBufferWet, visBufferMod;

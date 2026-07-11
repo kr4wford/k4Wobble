@@ -28,7 +28,7 @@ namespace wobble
     };
 
     inline constexpr int numDivisions = (int) (sizeof (divisions) / sizeof (divisions[0]));
-    inline constexpr int maxSteps     = 8;
+    inline constexpr int maxSteps     = 16;
     inline constexpr int restIndex    = numDivisions;   // pattern steps may also "Rest"
 
     inline juce::StringArray divisionNames (bool withRest)
@@ -47,15 +47,20 @@ namespace wobble
 
     A tempo-synced LFO (phase derived from the host timeline, so it's
     sample-accurate and loops identically on every pass) sweeps a TPT
-    state-variable filter, optionally re-choosing its rate every beat from an
-    8-step pattern. A "Talk" mode morphs three vowel formant band-passes
-    instead. Post-filter tanh drive adds the growl; dry/wet mix at the end.
+    state-variable filter, optionally re-choosing its rate — and, per step,
+    depth / cutoff offset / shape — from a 16-step pattern. A "Talk" mode
+    morphs three vowel formant band-passes instead. Post-filter drive
+    (soft/hard/fold) adds the growl; an optional Linkwitz-Riley split keeps
+    everything below the crossover clean and dry; dry/wet mix and output trim
+    come last. Every v1.1 parameter defaults to "off", making the engine
+    bit-compatible with v1.0 sessions.
 */
 class WobbleEngine
 {
 public:
     enum class Shape  { Sine = 0, Triangle, SawDown, SawUp, Square, Random };
     enum class Filter { LowPass = 0, BandPass, HighPass, Notch, Talk };
+    enum class Drive  { Soft = 0, Hard, Fold };
 
     struct Parameters
     {
@@ -68,9 +73,27 @@ public:
         float  driveDb    = 6.0f;
         float  widthDeg   = 0.0f;     // right-channel LFO phase offset
         float  mix        = 1.0f;     // 0..1 wet
+
         bool   usePattern = false;
-        int    patternLen = 8;        // 1..maxSteps, one beat per step
-        int    stepDiv[wobble::maxSteps] = { 4, 4, 4, 4, 4, 4, 4, 4 };
+        int    patternLen = 8;        // 1..maxSteps
+        int    stepDiv[wobble::maxSteps]   = { 4, 4, 4, 4, 4, 4, 4, 4,
+                                               4, 4, 4, 4, 4, 4, 4, 4 };
+        float  stepDepth[wobble::maxSteps] = { 1, 1, 1, 1, 1, 1, 1, 1,
+                                               1, 1, 1, 1, 1, 1, 1, 1 }; // scales depth
+        float  stepCut[wobble::maxSteps]   = {};  // -1..1 = +/- 2 octaves of cutoff
+        int    stepShape[wobble::maxSteps] = {};  // 0 = global, 1.. = Shape + 1
+
+        // v1.1 advanced — defaults are all neutral / off
+        float  splitHz    = 0.0f;     // < 20 = off; lows below this stay dry
+        float  swing      = 0.0f;     // 0..1, delays every 2nd step
+        float  push       = 0.0f;     // -0.5..0.5 cycles of LFO phase offset
+        bool   slope24    = false;    // cascade a 2nd filter stage
+        Drive  driveMode  = Drive::Soft;
+        float  lazy       = 0.0f;     // 0..1, glides the LFO between values
+        float  stepLenQ   = 1.0f;     // quarters per pattern step (0.5 / 1 / 2)
+        float  trimDb     = 0.0f;     // output trim
+        bool   autoGain   = false;    // full (vs half) drive compensation
+
         double bpm        = 140.0;
         double ppq        = 0.0;      // host quarter-note position at block start
         bool   isPlaying  = false;
@@ -106,14 +129,23 @@ private:
     float lfoCoeff = 0.01f;      // one-pole smoothing on the LFO (kills clicks)
     float lfoState[2] { 1.0f, 1.0f };
 
+    // Per-step lane values, smoothed so step boundaries don't zipper.
+    float laneDepthState = 1.0f;
+    float laneCutState   = 0.0f;
+
     Svf mainSvf[2];
+    Svf mainSvf2[2];             // second stage for the 24 dB slope
     Svf talkSvf[2][3];
+    Svf splitLp[2][2];           // Linkwitz-Riley low path  (2 cascaded stages)
+    Svf splitHp[2][2];           // Linkwitz-Riley high path (2 cascaded stages)
 
     juce::SmoothedValue<float> cutoffSm { 2500.0f };
     juce::SmoothedValue<float> resSm    { 0.4f };
     juce::SmoothedValue<float> depthSm  { 1.0f };
     juce::SmoothedValue<float> driveSm  { 6.0f };
     juce::SmoothedValue<float> mixSm    { 1.0f };
+    juce::SmoothedValue<float> splitSm  { 0.0f };
+    juce::SmoothedValue<float> trimSm   { 1.0f };  // linear gain
 
     juce::AudioBuffer<float> dryBuffer;
 

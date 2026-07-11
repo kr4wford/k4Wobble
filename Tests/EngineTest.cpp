@@ -3,10 +3,12 @@
 // signal, and that the LFO is locked to the timeline (same ppq = same output).
 
 #include "../Source/WobbleEngine.h"
+#include "../Source/PresetLibrary.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <vector>
 
 static int failures = 0;
@@ -298,6 +300,144 @@ int main()
         }
         expect (finite, "mono output is finite");
         expect (std::sqrt (rms / (100.0f * 512.0f)) > 0.005f, "mono passes signal");
+    }
+
+    // ---- v1.1 features -----------------------------------------------------
+
+    // Sub Guard: a tone far below the crossover passes nearly untouched even
+    // while the wobble chokes everything above it.
+    {
+        WobbleEngine engine;
+        auto p = base;
+        p.splitHz = 150.0f;
+        p.depth   = 1.0f;
+        engine.setParameters (p);
+        engine.prepare (sampleRate, 512, 2);
+
+        juce::AudioBuffer<float> buffer (2, 512);
+        std::vector<float> mod (512, 0.0f);
+        double phase = 0.0;
+        double inRms = 0.0, outRms = 0.0;
+
+        for (int b = 0; b < 200; ++b)
+        {
+            for (int i = 0; i < 512; ++i)
+            {
+                const float sine = 0.5f * std::sin (2.0f * wobble::kPi * (float) phase);
+                phase += 50.0 / sampleRate;   // 50 Hz sub, well below the split
+                buffer.setSample (0, i, sine);
+                buffer.setSample (1, i, sine);
+                inRms += (double) sine * sine;
+            }
+            p.ppq = (double) (b * 512) * (p.bpm / 60.0 / sampleRate);
+            engine.setParameters (p);
+            engine.process (buffer, mod.data());
+            for (int i = 0; i < 512; ++i)
+                outRms += (double) buffer.getSample (0, i) * buffer.getSample (0, i);
+        }
+        const double ratioDb = 10.0 * std::log10 (outRms / inRms);
+        std::printf ("sub guard: 50 Hz level change %.2f dB\n", ratioDb);
+        expect (std::abs (ratioDb) < 3.0, "sub guard keeps the sub within 3 dB");
+    }
+
+    // Swing + 16-step pattern + lanes + step length: finite and audible.
+    {
+        WobbleEngine engine;
+        engine.prepare (sampleRate, 512, 2);
+
+        auto p = base;
+        p.usePattern = true;
+        p.patternLen = 16;
+        p.swing      = 1.0f;
+        p.stepLenQ   = 0.5f;
+        p.lazy       = 0.5f;
+        for (int i = 0; i < 16; ++i)
+        {
+            p.stepDiv[i]   = (i % 5 == 0) ? wobble::restIndex : (i % wobble::numDivisions);
+            p.stepDepth[i] = (i % 2 == 0) ? 1.0f : 0.4f;
+            p.stepCut[i]   = ((i % 4) - 2) * 0.5f;
+            p.stepShape[i] = i % 7;
+        }
+        const auto r = render (engine, p, sampleRate, 0.0);
+        expect (r.finite, "16-step swung lane pattern is finite");
+        expect (r.rms > 0.005f, "16-step swung lane pattern passes signal");
+    }
+
+    // Drive modes and 24 dB slope: finite, bounded, audible.
+    for (int mode = 0; mode <= 2; ++mode)
+    {
+        WobbleEngine engine;
+        engine.prepare (sampleRate, 512, 2);
+
+        auto p = base;
+        p.driveMode = (WobbleEngine::Drive) mode;
+        p.driveDb   = 30.0f;
+        p.slope24   = true;
+        p.resonance = 0.9f;
+        const auto r = render (engine, p, sampleRate, 0.0);
+        expect (r.finite, "drive mode output is finite");
+        expect (r.rms > 0.003f && r.rms < 2.0f, "drive mode output is sane");
+    }
+
+    // The dice must be safe: over many rolls it never touches the level /
+    // routing parameters and every value stays inside its musical range.
+    {
+        juce::Random rng (0x5EED);
+        bool safe = true, bounded = true;
+
+        for (int roll = 0; roll < 500; ++roll)
+        {
+            std::map<juce::String, float> patch;
+            for (const auto& [id, value] : presets::randomPatch (rng))
+                patch[id] = value;
+
+            for (const auto* forbidden : { ids::mix, ids::split, ids::trim, ids::autogain })
+                if (patch.count (forbidden) > 0)
+                    safe = false;
+
+            const auto within = [&patch, &bounded] (const juce::String& id, float lo, float hi)
+            {
+                const auto it = patch.find (id);
+                if (it == patch.end() || it->second < lo || it->second > hi)
+                    bounded = false;
+            };
+            within (ids::cutoff, 800.0f, 6000.0f);
+            within (ids::res,    20.0f,  80.0f);
+            within (ids::depth,  60.0f,  100.0f);
+            within (ids::drive,  0.0f,   18.0f);
+            within (ids::swing,  0.0f,   60.0f);
+            within (ids::lazy,   0.0f,   40.0f);
+            within (ids::steps,  0.0f,   15.0f);
+            for (int i = 0; i < wobble::maxSteps; ++i)
+            {
+                within (ids::step (i), 0.0f, (float) wobble::restIndex);
+                within (ids::dep (i),  50.0f, 100.0f);
+                within (ids::cut (i), -25.0f, 25.0f);
+                within (ids::shp (i),  0.0f,  6.0f);
+            }
+        }
+        expect (safe,    "dice never touches Mix / Split / Trim / Auto-Gain");
+        expect (bounded, "dice values always stay in their musical ranges");
+    }
+
+    // Every factory preset carries values a control can actually show.
+    {
+        bool ok = true;
+        for (const auto& pr : presets::factory())
+        {
+            if (pr.name.isEmpty() || pr.category.isEmpty())
+                ok = false;
+            for (const auto& [id, value] : pr.settings())
+            {
+                juce::ignoreUnused (id);
+                if (! std::isfinite (value))
+                    ok = false;
+            }
+            if (pr.steps < 1 || pr.steps > wobble::maxSteps)
+                ok = false;
+        }
+        std::printf ("factory presets: %d\n", (int) presets::factory().size());
+        expect (ok, "factory presets are well-formed");
     }
 
     if (failures == 0)

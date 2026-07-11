@@ -1,22 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-
-namespace ids
-{
-    constexpr auto rate    = "rate";
-    constexpr auto shape   = "shape";
-    constexpr auto filter  = "filter";
-    constexpr auto cutoff  = "cutoff";
-    constexpr auto res     = "res";
-    constexpr auto depth   = "depth";
-    constexpr auto drive   = "drive";
-    constexpr auto width   = "width";
-    constexpr auto mix     = "mix";
-    constexpr auto pattern = "pattern";
-    constexpr auto steps   = "steps";
-
-    inline juce::String step (int i) { return "step" + juce::String (i + 1); }
-}
+#include "ParamIDs.h"
 
 K4WobbleProcessor::K4WobbleProcessor()
     : AudioProcessor (BusesProperties()
@@ -27,6 +11,32 @@ K4WobbleProcessor::K4WobbleProcessor()
     visBufferDry.assign (visFifoSize, 0.0f);
     visBufferWet.assign (visFifoSize, 0.0f);
     visBufferMod.assign (visFifoSize, 1.0f);
+
+    const auto raw = [this] (const juce::String& id)
+    {
+        auto* p = apvts.getRawParameterValue (id);
+        jassert (p != nullptr);
+        return p;
+    };
+
+    prm.rate      = raw (ids::rate);      prm.shape     = raw (ids::shape);
+    prm.filter    = raw (ids::filter);    prm.cutoff    = raw (ids::cutoff);
+    prm.res       = raw (ids::res);       prm.depth     = raw (ids::depth);
+    prm.drive     = raw (ids::drive);     prm.width     = raw (ids::width);
+    prm.mix       = raw (ids::mix);       prm.pattern   = raw (ids::pattern);
+    prm.steps     = raw (ids::steps);     prm.split     = raw (ids::split);
+    prm.swing     = raw (ids::swing);     prm.push      = raw (ids::push);
+    prm.slope     = raw (ids::slope);     prm.drivemode = raw (ids::drivemode);
+    prm.lazy      = raw (ids::lazy);      prm.steplen   = raw (ids::steplen);
+    prm.trim      = raw (ids::trim);      prm.autogain  = raw (ids::autogain);
+
+    for (int i = 0; i < wobble::maxSteps; ++i)
+    {
+        prm.stepDiv[i] = raw (ids::step (i));
+        prm.stepDep[i] = raw (ids::dep (i));
+        prm.stepCut[i] = raw (ids::cut (i));
+        prm.stepShp[i] = raw (ids::shp (i));
+    }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout K4WobbleProcessor::createLayout()
@@ -34,6 +44,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout K4WobbleProcessor::createLay
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
 
+    // ----- v1.0 parameters (IDs and ranges frozen; choice lists may only grow) -----
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { ids::rate, 1 }, "Rate", wobble::divisionNames (false), 4)); // 1/4
 
@@ -73,14 +84,69 @@ juce::AudioProcessorValueTreeState::ParameterLayout K4WobbleProcessor::createLay
     layout.add (std::make_unique<AudioParameterBool> (
         ParameterID { ids::pattern, 1 }, "Pattern", false));
 
+    // v1.0 saved indices 0..7 still map to "1".."8" — appending is safe.
+    StringArray stepCounts;
+    for (int i = 1; i <= wobble::maxSteps; ++i)
+        stepCounts.add (String (i));
     layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { ids::steps, 1 }, "Steps",
-        StringArray { "1", "2", "3", "4", "5", "6", "7", "8" }, 7));
+        ParameterID { ids::steps, 1 }, "Steps", stepCounts, 7));
 
     for (int i = 0; i < wobble::maxSteps; ++i)
         layout.add (std::make_unique<AudioParameterChoice> (
             ParameterID { ids::step (i), 1 }, "Step " + String (i + 1),
             wobble::divisionNames (true), 4)); // 1/4
+
+    // ----- v1.1 parameters (all defaults neutral = v1.0 behaviour) -----
+    NormalisableRange<float> splitRange (0.0f, 500.0f, 1.0f);
+    splitRange.setSkewForCentre (120.0f);
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::split, 1 }, "Split", splitRange, 0.0f));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::swing, 1 }, "Swing",
+        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::push, 1 }, "Push",
+        NormalisableRange<float> (-50.0f, 50.0f, 0.1f), 0.0f));
+
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { ids::slope, 1 }, "Slope",
+        StringArray { "12 dB", "24 dB" }, 0));
+
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { ids::drivemode, 1 }, "Drive Mode",
+        StringArray { "Soft", "Hard", "Fold" }, 0));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::lazy, 1 }, "Lazy",
+        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f));
+
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { ids::steplen, 1 }, "Step Length",
+        StringArray { "1/2 beat", "1 beat", "2 beats" }, 1));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::trim, 1 }, "Trim",
+        NormalisableRange<float> (-24.0f, 12.0f, 0.1f), 0.0f));
+
+    layout.add (std::make_unique<AudioParameterBool> (
+        ParameterID { ids::autogain, 1 }, "Auto-Gain", false));
+
+    for (int i = 0; i < wobble::maxSteps; ++i)
+    {
+        layout.add (std::make_unique<AudioParameterFloat> (
+            ParameterID { ids::dep (i), 1 }, "Step Depth " + String (i + 1),
+            NormalisableRange<float> (0.0f, 100.0f, 1.0f), 100.0f));
+
+        layout.add (std::make_unique<AudioParameterFloat> (
+            ParameterID { ids::cut (i), 1 }, "Step Cutoff " + String (i + 1),
+            NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f));
+
+        layout.add (std::make_unique<AudioParameterChoice> (
+            ParameterID { ids::shp (i), 1 }, "Step Shape " + String (i + 1),
+            StringArray { "Global", "Sine", "Triangle", "Saw Down", "Saw Up", "Square", "Random" }, 0));
+    }
 
     return layout;
 }
@@ -113,19 +179,35 @@ void K4WobbleProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     // Gather current parameter values into the engine.
     WobbleEngine::Parameters p;
-    p.shape      = static_cast<WobbleEngine::Shape>  ((int) apvts.getRawParameterValue (ids::shape)->load());
-    p.filter     = static_cast<WobbleEngine::Filter> ((int) apvts.getRawParameterValue (ids::filter)->load());
-    p.rateDiv    = (int) apvts.getRawParameterValue (ids::rate)->load();
-    p.cutoffHz   = apvts.getRawParameterValue (ids::cutoff)->load();
-    p.resonance  = apvts.getRawParameterValue (ids::res)->load()   * 0.01f;
-    p.depth      = apvts.getRawParameterValue (ids::depth)->load() * 0.01f;
-    p.driveDb    = apvts.getRawParameterValue (ids::drive)->load();
-    p.widthDeg   = apvts.getRawParameterValue (ids::width)->load();
-    p.mix        = apvts.getRawParameterValue (ids::mix)->load()   * 0.01f;
-    p.usePattern = apvts.getRawParameterValue (ids::pattern)->load() > 0.5f;
-    p.patternLen = 1 + (int) apvts.getRawParameterValue (ids::steps)->load();
+    p.shape      = static_cast<WobbleEngine::Shape>  ((int) prm.shape->load());
+    p.filter     = static_cast<WobbleEngine::Filter> ((int) prm.filter->load());
+    p.rateDiv    = (int) prm.rate->load();
+    p.cutoffHz   = prm.cutoff->load();
+    p.resonance  = prm.res->load()   * 0.01f;
+    p.depth      = prm.depth->load() * 0.01f;
+    p.driveDb    = prm.drive->load();
+    p.widthDeg   = prm.width->load();
+    p.mix        = prm.mix->load()   * 0.01f;
+    p.usePattern = prm.pattern->load() > 0.5f;
+    p.patternLen = 1 + (int) prm.steps->load();
+
+    p.splitHz    = prm.split->load();
+    p.swing      = prm.swing->load() * 0.01f;
+    p.push       = prm.push->load()  * 0.01f;
+    p.slope24    = prm.slope->load() > 0.5f;
+    p.driveMode  = static_cast<WobbleEngine::Drive> ((int) prm.drivemode->load());
+    p.lazy       = prm.lazy->load() * 0.01f;
+    p.stepLenQ   = (float) std::pow (2.0, (int) prm.steplen->load() - 1); // 0.5 / 1 / 2
+    p.trimDb     = prm.trim->load();
+    p.autoGain   = prm.autogain->load() > 0.5f;
+
     for (int i = 0; i < wobble::maxSteps; ++i)
-        p.stepDiv[i] = (int) apvts.getRawParameterValue (ids::step (i))->load();
+    {
+        p.stepDiv[i]   = (int) prm.stepDiv[i]->load();
+        p.stepDepth[i] = prm.stepDep[i]->load() * 0.01f;
+        p.stepCut[i]   = prm.stepCut[i]->load() * 0.01f;
+        p.stepShape[i] = (int) prm.stepShp[i]->load();
+    }
 
     // Sync to the host timeline; free-run at the last known tempo when stopped.
     if (auto* playHead = getPlayHead())

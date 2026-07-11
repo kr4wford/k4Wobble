@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(k4Wobble VERSION 1.0.0 LANGUAGES C CXX)
+project(k4Wobble VERSION 1.1.0 LANGUAGES C CXX)
 
 # Use a JUCE checkout sitting next to this project if present (fast local
 # builds); otherwise fetch the latest JUCE 8 automatically (CI, fresh clones).

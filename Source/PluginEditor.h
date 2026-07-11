@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_utils/juce_audio_utils.h>
 #include "PluginProcessor.h"
 #include "WobbleScope.h"
 #include "PatternStrip.h"
@@ -46,15 +47,29 @@ private:
         std::unique_ptr<SliderAttachment> attachment;
     };
 
+    struct LabeledBox
+    {
+        juce::ComboBox box;
+        juce::Label    label;
+        std::unique_ptr<BoxAttachment> attachment;
+    };
+
     void setupKnob (LabeledKnob&, const juce::String& paramID, const juce::String& text,
                     const juce::String& suffix, const juce::String& help);
-    void setupBox (juce::ComboBox&, juce::Label&, std::unique_ptr<BoxAttachment>&,
-                   const juce::String& paramID, const juce::String& text,
+    void setupBox (LabeledBox&, const juce::String& paramID, const juce::String& text,
                    const juce::StringArray& items, const juce::String& help);
-    void applyPreset (int presetIndex);
+
+    void applySettings (const std::vector<std::pair<juce::String, float>>&);
+    void applyUserPresetFile (const juce::File&);
+    void saveUserPreset();
+    void rebuildPresetMenu (int selectId);
+    void rollDice();
     void markCustom();
     void applyTipsMode();
     void updateEnabledControls();
+    void updateAdvancedView();
+
+    static juce::File userPresetDirectory();
 
     K4WobbleProcessor& proc;
 
@@ -67,23 +82,29 @@ private:
 
     juce::ComboBox presetBox;
     juce::Label    presetLabel;
+    juce::TextButton saveButton { "Save" };
+    juce::TextButton diceButton { "Dice" };
+    juce::Array<juce::File> userPresetFiles;
+    std::unique_ptr<juce::FileChooser> fileChooser;
 
-    juce::ToggleButton tipsButton { "Tips" };
+    juce::ToggleButton tipsButton     { "Tips" };
+    juce::ToggleButton advancedButton { "Advanced" };
 
     juce::ToggleButton patternButton { "Pattern" };
     std::unique_ptr<ButtonAttachment> patternAttachment;
 
-    juce::ComboBox stepsBox;
-    juce::Label    stepsLabel;
-    std::unique_ptr<BoxAttachment> stepsAttachment;
+    LabeledBox stepsBox;
 
-    juce::ComboBox rateBox, shapeBox, filterBox;
-    juce::Label    rateLabel, shapeLabel, filterLabel;
-    std::unique_ptr<BoxAttachment> rateAttachment, shapeAttachment, filterAttachment;
+    LabeledBox rateBox, shapeBox, filterBox;             // simple combos
+    LabeledBox slopeBox, driveModeBox, stepLenBox;       // advanced combos
+    juce::ToggleButton autoGainButton { "Auto-Gain" };
+    std::unique_ptr<ButtonAttachment> autoGainAttachment;
 
-    LabeledKnob cutoff, res, depth, drive, width, mix;
+    LabeledKnob cutoff, res, depth, drive, split, width, mix;   // main row
+    LabeledKnob swing, push, lazy, trim;                        // advanced row
 
     bool settingPreset = false;
+    bool advanced      = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (K4WobbleEditor)
 };
